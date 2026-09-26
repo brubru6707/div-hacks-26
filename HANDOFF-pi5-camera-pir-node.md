@@ -25,7 +25,7 @@ Sample photos are in `captures/` in this folder. `trig_081020.jpg` shows a hand 
 ## Login
 ```
 username: pi
-password: (shared separately — see local CREDENTIALS.txt or ask Bruno)
+password: YOURPASSWORD
 ```
 `sudo` uses the same password. Please change it once you're in (`passwd`).
 
