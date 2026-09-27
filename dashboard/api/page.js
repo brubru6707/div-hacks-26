@@ -294,13 +294,15 @@ function render(d) {
   $('irtxt').textContent = pending !== null ? (pending ? 'Turning on…' : 'Turning off…') : ir ? 'On' : 'Off'
   $('irsub').textContent = s.ir && s.irLeft != null ? 'Auto-off in ' + Math.ceil(s.irLeft) + 's (overheat guard)' : 'Turns itself off after a while to avoid overheating'
   // Rat detection: d.detect is what was asked for, s.detect is what the Pi reports
-  const want = detPending ?? !!d.detect, det = s.detect || {}
-  if (detPending !== null && !!d.detect === detPending && !!det.on === detPending) detPending = null
+  // A Pi whose agent predates rat detection sends no s.detect at all: say so instead of waiting forever.
+  const want = detPending ?? !!d.detect, det = s.detect || {}, old = !s.detect
+  if (detPending !== null && !!d.detect === detPending && (old || !!det.on === detPending)) detPending = null
   $('det').setAttribute('aria-checked', want); $('det').disabled = detPending !== null
   $('dettxt').textContent = detPending !== null ? (detPending ? 'Starting…' : 'Stopping…')
-    : !want ? 'Off' : det.error && !det.on ? 'Error' : !det.ready ? 'Loading model…' : det.rats ? 'Rat in view' : 'Watching'
+    : !want ? 'Off' : old ? 'Pi not updated' : det.error && !det.on ? 'Error' : !det.on ? 'Starting…' : !det.ready ? 'Loading model…' : det.rats ? 'Rat in view' : 'Watching'
   $('dettxt').className = 'big' + (want && det.rats ? ' motion' : '')
-  $('detsub').textContent = want && det.error && !det.on ? det.error
+  $('detsub').textContent = want && old ? "The Pi's agent doesn't have rat detection yet. It needs the update in pi/agent.py."
+    : want && det.error && !det.on ? det.error
     : want && det.ready ? [det.fps && det.fps + ' fps', det.ms && Math.round(det.ms) + ' ms a frame',
         det.sightings + ' sighting' + (det.sightings === 1 ? '' : 's') + (det.lastSighting ? ', last ' + ago(d.now - det.lastSighting) : ''),
         d.detect && 'off in ' + Math.ceil((d.detect.until - d.now) / 60000) + ' min'].filter(Boolean).join(' · ')
