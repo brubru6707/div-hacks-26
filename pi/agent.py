@@ -498,9 +498,19 @@ recorder = Recorder()
 uploader = Uploader()
 streamer = Streamer()
 detector = RatDetector()
+# The team's live-worker handoff (poc vision/pi/LIVE_BRIDGE.md). Disabled unless OWL_DETECT_SOCKET is set.
+# The bridge uses stdlib only and does not wait for detector inference in the camera callback.
+handoff = None
+try:
+    from live_bridge import from_env
+    handoff = from_env()
+except Exception as e:
+    log("detector handoff disabled:", type(e).__name__, e)
 # The recorder gets the raw frame; only what is shown on the dashboard gets boxes.
-cam = Camera(on_frame=(recorder.write, lambda f: streamer.push(detector.annotate(f)) if streamer.want else None,
-                       detector.feed))
+callbacks = (recorder.write, lambda f: streamer.push(detector.annotate(f)) if streamer.want else None, detector.feed)
+if handoff is not None:
+    callbacks += (handoff,)
+cam = Camera(on_frame=callbacks)
 wake = threading.Event()
 last_motion = None
 motion_seen = False  # latched between syncs so short motion isn't missed
@@ -658,6 +668,8 @@ if __name__ == "__main__":
     finally:
         streamer.set(False)
         detector.set(False)
+        if handoff is not None:
+            handoff.close()
         recorder.stop()
         cam.stop()
         ir.off()
