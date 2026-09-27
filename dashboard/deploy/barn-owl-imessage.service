@@ -1,0 +1,24 @@
+[Unit]
+Description=Barn Owl over iMessage (Photon Spectrum), forwarding to the Grok assistant in poc-api
+After=network-online.target poc-api.service
+Wants=network-online.target
+
+[Service]
+User=poc
+Group=poc
+WorkingDirectory=/srv/poc/imessage
+# Straight to the API on this box, skipping Caddy.
+Environment=BARN_OWL_AGENT_URL=http://127.0.0.1:8772/agent/chat
+# PROJECT_ID and PROJECT_SECRET from the Photon dashboard: push-imessage.sh copies imessage/.env here.
+EnvironmentFile=/etc/poc/imessage.env
+ExecStart=/srv/poc/imessage/node_modules/.bin/tsx src/index.ts
+Restart=always
+RestartSec=5
+MemoryMax=200M
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
