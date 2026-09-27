@@ -11,7 +11,7 @@ export default async function handler(req, res) {
   // fast=1: the page is showing the 15 fps stream, so tell the Pi to push it.
   const fast = req.query.fast === '1'
   const n = await node()
-  const projection = { state: 1, frameTs: 1, recording: 1, zoom: 1, ...(live && !fast && { frame: 1 }) }
+  const projection = { state: 1, frameTs: 1, recording: 1, zoom: 1, detect: 1, ...(live && !fast && { frame: 1 }) }
   const mark = { ...(live && { viewer: now }), ...(fast && { fastViewer: now }) }
   const doc = Object.keys(mark).length
     ? await n.findOneAndUpdate({ _id: 'node' }, { $set: mark }, { upsert: true, returnDocument: 'after', projection })
@@ -26,5 +26,7 @@ export default async function handler(req, res) {
   const recording = doc?.recording ? { id: String(doc.recording.id), startedAt: doc.recording.startedAt } : null
 
   res.setHeader('Cache-Control', 'no-store')
-  res.json({ now, online, state, frameTs, frame: fresh ? doc.frame : null, recording, zoom: doc?.zoom ?? 1 })
+  // detect: what the dashboard asked for (the Pi's own report is state.detect)
+  const detect = doc?.detect?.on && now < doc.detect.until ? { until: doc.detect.until } : null
+  res.json({ now, online, state, frameTs, frame: fresh ? doc.frame : null, recording, zoom: doc?.zoom ?? 1, detect })
 }

@@ -11,6 +11,11 @@ frame goes to a file under OWL_REC_DIR, which is then uploaded to the droplet
 for the dashboard's Videos tab (see Uploader). The dashboard normally gets a small
 1 fps preview; when someone picks "15 fps" on barn-owl.tech, every frame is
 also pushed over one long-lived connection to the droplet (see Streamer).
+
+"Rat detection" on the dashboard runs the team's rat model on the live frames
+(see RatDetector): boxes are drawn on the preview and the 15 fps view (never on
+the recordings, which stay clean training data), and each confirmed sighting is
+POSTed to /api/detections.
 """
 import base64
 import glob
@@ -29,9 +34,9 @@ import urllib.request
 from gpiozero import DigitalOutputDevice, MotionSensor
 
 try:
-    from PIL import Image
-except ImportError:  # previews are then sent full size
-    Image = None
+    from PIL import Image, ImageDraw
+except ImportError:  # previews are then sent full size, and without boxes
+    Image = ImageDraw = None
 
 # Comma-separated, primary first (the droplet), then backups (Vercel). Both
 # sites share one database, so whichever the Pi reaches, both dashboards update.
@@ -53,6 +58,14 @@ ZOOMS = (1.0, 1.5, 2.0, 2.5)
 FPS = int(os.environ.get("OWL_CAM_FPS", 15))
 REC_DIR = os.path.expanduser(os.environ.get("OWL_REC_DIR", "~/barn-owl/recordings"))
 REC_MAX = 30 * 60  # seconds; the dashboard enforces the same limit
+# The rat model runs in its own venv (numpy, OpenCV, ONNX Runtime) via pi/rat_worker.py; see RatDetector.
+DETECT_PY = os.path.expanduser(os.environ.get("OWL_DETECT_PY", "~/barn-owl-candidates/v3-3214f2a0/.venv/bin/python"))
+DETECT_WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rat_worker.py")
+DETECT_MODEL_NAME = os.environ.get("OWL_DETECT_NAME", "rat-litroom-v5")
+BOX_HOLD = 0.6  # seconds a box stays drawn after the frame it was found in
+# The model confirms a rat every couple of seconds while it stays in view; one saved sighting (a
+# Tiger Data row and a Solana anchor, which costs a fee) per this many seconds is plenty.
+SIGHTING_GAP = float(os.environ.get("OWL_DETECT_GAP", 30))
 # --mode picks the full-sensor 2x2-binned mode. Without it, asking for 640x480
 # selects the sensor's 640x480 mode, which reads only the central 1280x960 of
 # the 3280x2464 sensor -- the "zoomed in" look. OWL_CAM_EXTRA adds options such
@@ -323,12 +336,171 @@ class Uploader:
             conn.close()
 
 
+class RatDetector:
+    """Runs rat_worker.py while the dashboard has "Rat detection" on. The camera
+    thread hands it a frame only when it is idle (the newest frame, never a
+    queue), so detection can't slow the camera, the stream or a recording.
+    Boxes from the latest result are drawn onto frames shown on the dashboard."""
+
+    def __init__(self):
+        self.proc = None
+        self.busy = False
+        self.want = False
+        self.lock = threading.Lock()
+        self.rats = []           # [[x, y, w, h, conf], ...] from the latest result
+        self.boxes_at = 0.0
+        self.ms = None           # inference time of the latest frame
+        self.times = []          # result times over the last few seconds, for fps
+        self.events = 0
+        self.last_event = None
+        self.error = None
+        self.model = None
+
+    @property
+    def running(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def set(self, on):
+        self.want = on
+        if on and not self.running:
+            self.start()
+        elif not on and self.proc:
+            self.stop()
+
+    def start(self):
+        if not os.path.exists(DETECT_PY):
+            self.error = f"detector venv not found ({DETECT_PY})"
+            return
+        log("rat detection on")
+        self.error, self.model, self.busy = None, None, True  # busy until the model reports ready
+        self.proc = subprocess.Popen([DETECT_PY, "-u", DETECT_WORKER], stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        threading.Thread(target=self._read, args=(self.proc,), daemon=True).start()
+        threading.Thread(target=self._errors, args=(self.proc,), daemon=True).start()
+
+    def stop(self):
+        log("rat detection off")
+        proc, self.proc = self.proc, None
+        try:
+            proc.stdin.close()
+            proc.terminate()
+            proc.wait(3)
+        except Exception:
+            proc.kill()
+        with self.lock:
+            self.rats, self.ms, self.times = [], None, []
+
+    def feed(self, jpeg):
+        """Camera thread: hand over this frame if the worker is free."""
+        if self.busy or not self.running:
+            return
+        self.busy = True
+        try:
+            self.proc.stdin.write(len(jpeg).to_bytes(4, "big") + jpeg)
+            self.proc.stdin.flush()
+        except Exception:
+            self.busy = False
+
+    def _read(self, proc):
+        for line in proc.stdout:
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            now = time.monotonic()
+            if r.get("ready"):
+                self.model = r.get("model")
+                log(f"rat model {self.model} loaded")
+            elif r.get("error"):
+                self.error = r["error"]
+            else:
+                with self.lock:
+                    self.rats, self.ms = r["rats"], r["ms"]
+                    if self.rats:
+                        self.boxes_at = now
+                    self.times = [t for t in self.times if now - t < 3] + [now]
+                if r.get("event"):
+                    self.sighting(r["event"])
+            self.busy = False
+        if self.proc is proc and self.want:  # died on its own: the next sync restarts it
+            self.error = self.error or f"detector exited ({proc.poll()})"
+            self.proc = None
+
+    def _errors(self, proc):
+        for line in proc.stderr:
+            text = line.decode(errors="replace").strip()
+            if text:
+                log("detector:", text)
+                self.error = text[-200:]
+
+    def sighting(self, ev):
+        now = time.monotonic()
+        if self.last_event is not None and now - self.last_event < SIGHTING_GAP:
+            return
+        self.events += 1
+        self.last_event = now
+        x, y, w, h = ev["box"]
+        log(f"rat sighted ({ev['conf']:.2f}, {ev['hits']} frames)")
+        rec = recorder.report()
+        body = {"label": "rat", "confidence": ev["conf"], "box": [x, y, w, h], "model": DETECT_MODEL_NAME,
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z",
+                **({"recording": rec["id"], "frame": rec["frames"]} if rec and not rec["done"] else {})}
+        threading.Thread(target=self._post, args=(body,), daemon=True).start()
+
+    def _post(self, body):
+        url = URLS[current][:-len("/api/pi")] + "/api/detections"
+        req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers={
+            "Content-Type": "application/json", "Authorization": f"Bearer {TOKEN}"})
+        try:
+            urllib.request.urlopen(req, timeout=10).read()
+        except Exception as e:
+            log("could not save the sighting:", e)
+
+    def annotate(self, jpeg):
+        """The frame with the latest rat boxes drawn on, or the frame untouched."""
+        with self.lock:
+            rats = self.rats if self.running and time.monotonic() - self.boxes_at < BOX_HOLD else []
+        if not rats or Image is None:
+            return jpeg
+        try:
+            im = Image.open(io.BytesIO(jpeg)).convert("RGB")
+            d = ImageDraw.Draw(im)
+            W, H = im.size
+            for x, y, w, h, conf in rats:
+                box = (x * W, y * H, (x + w) * W, (y + h) * H)
+                d.rectangle(box, outline=(255, 64, 64), width=3)
+                label = f"rat {conf:.0%}"
+                tw = d.textlength(label) + 8
+                ty = box[1] - 14 if box[1] >= 14 else box[3]
+                d.rectangle((box[0], ty, box[0] + tw, ty + 14), fill=(255, 64, 64))
+                d.text((box[0] + 4, ty + 1), label, fill=(255, 255, 255))
+            out = io.BytesIO()
+            im.save(out, "JPEG", quality=80)
+            return out.getvalue()
+        except Exception:
+            return jpeg
+
+    def status(self):
+        with self.lock:
+            fps = (len(self.times) - 1) / (self.times[-1] - self.times[0]) if len(self.times) > 2 else None
+            return {
+                "on": self.running, "ready": self.model is not None, "model": self.model,
+                "fps": round(fps, 1) if fps else None, "ms": self.ms, "rats": len(self.rats),
+                "sightings": self.events,
+                "lastSightingAgo": None if self.last_event is None else time.monotonic() - self.last_event,
+                "error": self.error,
+            }
+
+
 pir = MotionSensor(PIR_PIN)
 ir = DigitalOutputDevice(IR_PIN, initial_value=False)
 recorder = Recorder()
 uploader = Uploader()
 streamer = Streamer()
-cam = Camera(on_frame=(recorder.write, streamer.push))
+detector = RatDetector()
+# The recorder gets the raw frame; only what is shown on the dashboard gets boxes.
+cam = Camera(on_frame=(recorder.write, lambda f: streamer.push(detector.annotate(f)) if streamer.want else None,
+                       detector.feed))
 wake = threading.Event()
 last_motion = None
 motion_seen = False  # latched between syncs so short motion isn't missed
@@ -419,10 +591,11 @@ def sync_to(url, frame, rec):
         "interval": LIVE_INTERVAL if cam.running else IDLE_INTERVAL,
         "host": socket.gethostname(),
         "zoom": cam.zoom,
+        "detect": detector.status(),
         **vitals(),
     }
     if frame:
-        body["frame"] = base64.b64encode(preview(frame)).decode()
+        body["frame"] = base64.b64encode(preview(detector.annotate(frame))).decode()
     if rec:
         body["rec"] = rec
     req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers={
@@ -467,7 +640,8 @@ def main():
             recorder.stop()
         zoom = resp.get("zoom")
         zoom = float(zoom) if zoom in ZOOMS else None
-        if resp.get("viewer") or recorder.active:
+        detector.set(bool(resp.get("detect")))
+        if resp.get("viewer") or recorder.active or detector.want:
             cam.start(zoom)
         else:
             cam.stop()
@@ -483,6 +657,7 @@ if __name__ == "__main__":
         main()
     finally:
         streamer.set(False)
+        detector.set(False)
         recorder.stop()
         cam.stop()
         ir.off()

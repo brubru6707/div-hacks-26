@@ -28,6 +28,14 @@ export default async function handler(req, res) {
       irLeft: b.irLeft ?? null,
       interval: Number(b.interval) || 10,
       host: String(b.host || ''),
+      // The rat detector's own report (agent.py RatDetector.status), shown next to the switch.
+      detect: b.detect && typeof b.detect === 'object' ? {
+        on: !!b.detect.on, ready: !!b.detect.ready, model: b.detect.model ? String(b.detect.model).slice(0, 16) : null,
+        fps: Number.isFinite(b.detect.fps) ? b.detect.fps : null, ms: Number.isFinite(b.detect.ms) ? b.detect.ms : null,
+        rats: Number(b.detect.rats) || 0, sightings: Number(b.detect.sightings) || 0,
+        lastSighting: Number.isFinite(b.detect.lastSightingAgo) ? now - Math.round(b.detect.lastSightingAgo * 1000) : null,
+        error: b.detect.error ? String(b.detect.error).slice(0, 200) : null,
+      } : null,
     },
   }
   const frame = typeof b.frame === 'string' && b.frame ? b.frame : null
@@ -37,7 +45,7 @@ export default async function handler(req, res) {
   const before = await n.findOneAndUpdate(
     { _id: 'node' },
     { $set: set, $unset: { irCmd: '' } },
-    { upsert: true, returnDocument: 'before', projection: { viewer: 1, fastViewer: 1, irCmd: 1, recording: 1, zoom: 1, 'state.pir': 1 } },
+    { upsert: true, returnDocument: 'before', projection: { viewer: 1, fastViewer: 1, irCmd: 1, recording: 1, zoom: 1, detect: 1, 'state.pir': 1 } },
   )
 
   let rec = before?.recording ?? null
@@ -72,11 +80,13 @@ export default async function handler(req, res) {
   const cmd = before?.irCmd && now - before.irCmd.at < IR_CMD_TTL_MS ? before.irCmd.value : null
   const watching = !!before?.viewer && now - before.viewer < VIEWER_WINDOW_MS
   const fast = !!before?.fastViewer && now - before.fastViewer < VIEWER_WINDOW_MS
+  const detect = !!before?.detect?.on && now < before.detect.until
+  if (before?.detect && !detect) await n.updateOne({ _id: 'node' }, { $unset: { detect: '' } }) // timed out
   // The time series: one row per check-in in Tiger Data.
   await logReading({
     ts: now, pir: set.state.pir, ir: set.state.ir, zoom: Number(b.zoom) || null,
     cameraOn: watching || fast || !!rec, recording: rec ? String(rec.id) : null,
     cpuTemp: Number.isFinite(b.cpuTemp) ? b.cpuTemp : null, wifiDbm: Number.isFinite(b.wifiDbm) ? Math.round(b.wifiDbm) : null,
   }, !!before?.state?.pir)
-  res.json({ viewer: watching || fast || !!rec, fast, ir: cmd, record: rec ? String(rec.id) : null, zoom: before?.zoom ?? 1 })
+  res.json({ viewer: watching || fast || !!rec, fast, ir: cmd, record: rec ? String(rec.id) : null, zoom: before?.zoom ?? 1, detect })
 }

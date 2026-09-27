@@ -179,6 +179,8 @@ pre{grid-column:1/-1;margin:0;background:var(--field);border:1px solid var(--lin
 <section class="card"><div class="label">PIR motion sensor (GPIO23)</div><div class="big" id="pir">—</div><div class="sub" id="last"></div></section>
 <section class="card"><div class="toggle"><div><div class="label">IR light (GPIO4)</div><div class="big" id="irtxt">—</div><div class="sub" id="irsub"></div></div>
 <button class="switch" id="ir" role="switch" aria-checked="false" aria-label="IR light"></button></div></section>
+<section class="card"><div class="toggle"><div><div class="label">Rat detection (team model, on the Pi)</div><div class="big" id="dettxt">—</div><div class="sub" id="detsub"></div></div>
+<button class="switch" id="det" role="switch" aria-checked="false" aria-label="Rat detection"></button></div></section>
 </div>
 </div>
 <div class="view" id="recs" hidden>
@@ -291,6 +293,18 @@ function render(d) {
   $('ir').setAttribute('aria-checked', ir); $('ir').disabled = pending !== null
   $('irtxt').textContent = pending !== null ? (pending ? 'Turning on…' : 'Turning off…') : ir ? 'On' : 'Off'
   $('irsub').textContent = s.ir && s.irLeft != null ? 'Auto-off in ' + Math.ceil(s.irLeft) + 's (overheat guard)' : 'Turns itself off after a while to avoid overheating'
+  // Rat detection: d.detect is what was asked for, s.detect is what the Pi reports
+  const want = detPending ?? !!d.detect, det = s.detect || {}
+  if (detPending !== null && !!d.detect === detPending && !!det.on === detPending) detPending = null
+  $('det').setAttribute('aria-checked', want); $('det').disabled = detPending !== null
+  $('dettxt').textContent = detPending !== null ? (detPending ? 'Starting…' : 'Stopping…')
+    : !want ? 'Off' : det.error && !det.on ? 'Error' : !det.ready ? 'Loading model…' : det.rats ? 'Rat in view' : 'Watching'
+  $('dettxt').className = 'big' + (want && det.rats ? ' motion' : '')
+  $('detsub').textContent = want && det.error && !det.on ? det.error
+    : want && det.ready ? [det.fps && det.fps + ' fps', det.ms && Math.round(det.ms) + ' ms a frame',
+        det.sightings + ' sighting' + (det.sightings === 1 ? '' : 's') + (det.lastSighting ? ', last ' + ago(d.now - det.lastSighting) : ''),
+        d.detect && 'off in ' + Math.ceil((d.detect.until - d.now) / 60000) + ' min'].filter(Boolean).join(' · ')
+    : 'Boxes rats in the live view and logs each sighting. Off by itself after 30 min.'
 }
 
 async function poll() {
@@ -301,6 +315,17 @@ async function poll() {
     render(await r.json())
   } catch { document.body.classList.add('offline'); $('status').textContent = 'No connection'; $('status').className = 'off' }
   if (!document.hidden) timer = setTimeout(poll, tab === 'live' ? 1000 : 3000)
+}
+
+let detPending = null
+$('det').onclick = async () => {
+  detPending = $('det').getAttribute('aria-checked') !== 'true'
+  $('det').disabled = true
+  const r = await fetch('api/detect', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ on: detPending }) })
+  if (!r.ok) { detPending = null; toast('Could not change rat detection') }
+  else toast(detPending ? 'Rat detection starting (the model takes a few seconds to load)' : 'Rat detection off')
+  setTimeout(() => { if (detPending !== null) { detPending = null; poll() } }, 20000) // give up waiting if the Pi never applies it
+  poll()
 }
 
 $('ir').onclick = async () => {

@@ -10,7 +10,7 @@ import { videoIn, videoOut, zipOut } from './lib/videos.js'
 const PORT = Number(process.env.PORT || 8771)
 const HOST = process.env.HOST || '127.0.0.1'
 const MAX_BODY = 2 * 1024 * 1024
-const ROUTES = new Set(['page', 'pi', 'state', 'ir', 'login', 'record', 'recordings', 'frame', 'cam', 'activity', 'detections', 'solana'])
+const ROUTES = new Set(['page', 'pi', 'state', 'ir', 'login', 'record', 'recordings', 'frame', 'cam', 'activity', 'detections', 'solana', 'detect'])
 const handlers = {}
 
 async function parseBody(req) {
