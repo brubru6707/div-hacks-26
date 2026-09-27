@@ -216,7 +216,9 @@ export async function refresh() {
   const sigs = [...new Set(sent.map(a => a.sig))]
   for (let i = 0; i < sigs.length; i += 100) {
     const batch = sigs.slice(i, i + 100)
-    const { value } = await rpc('getSignatureStatuses', [batch])
+    // searchTransactionHistory: without it the RPC only knows the last few minutes, so a transaction that
+    // confirmed while nobody had the tab open looked lost and was resent (and finally marked failed).
+    const { value } = await rpc('getSignatureStatuses', [batch, { searchTransactionHistory: true }])
     for (const [j, s] of value.entries()) {
       const sig = batch[j]
       if (s && !s.err && (s.confirmationStatus === 'confirmed' || s.confirmationStatus === 'finalized')) {
@@ -226,6 +228,16 @@ export async function refresh() {
       } else if (!s && sent.find(a => a.sig === sig).sentAt < Date.now() - RESEND_AFTER_MS) {
         await col.updateMany({ sig, status: 'sent', tries: { $lt: MAX_TRIES } }, { $set: { status: 'pending' }, $unset: { sig: '' } })
         await col.updateMany({ sig, status: 'sent' }, { $set: { status: 'failed', error: 'never confirmed' } })
+      }
+    }
+  }
+  // Heal anchors given up on as "never confirmed" whose last transaction did land after all.
+  const lost = await col.find({ status: 'failed', error: 'never confirmed', sig: { $exists: true } }).limit(100).toArray()
+  if (lost.length) {
+    const { value } = await rpc('getSignatureStatuses', [lost.map(a => a.sig), { searchTransactionHistory: true }])
+    for (const [j, s] of value.entries()) {
+      if (s && !s.err && (s.confirmationStatus === 'confirmed' || s.confirmationStatus === 'finalized')) {
+        await col.updateOne({ _id: lost[j]._id }, { $set: { status: 'confirmed', slot: s.slot, confirmedAt: Date.now() }, $unset: { error: '' } })
       }
     }
   }
