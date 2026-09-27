@@ -155,6 +155,8 @@ pre{grid-column:1/-1;margin:0;background:var(--field);border:1px solid var(--lin
 .crow .res b.ok{color:var(--ok)} .crow .res b.bad{color:var(--bad)}
 .crow.fresh{animation:fresh 2.5s ease-out}
 @keyframes fresh{from{background:var(--ok-bg)}to{background:transparent}}
+.kind.ai{background:var(--accent);border-color:var(--accent);color:#fff}
+.crow .thumb{height:28px;width:37px;object-fit:cover;border-radius:5px;vertical-align:middle;margin-right:8px}
 .kind{font-size:10px;font-weight:600;padding:2px 8px;border-radius:99px;background:var(--field);border:1px solid var(--line);color:var(--muted);margin-right:6px}
 .drop{display:block;background:var(--field);border:1.5px dashed var(--track);border-radius:var(--r);padding:22px;text-align:center;color:var(--muted);cursor:pointer}
 .drop.over{border-color:var(--accent);color:var(--text)}
@@ -699,11 +701,19 @@ function chainRow(a) {
 function updateRow(a) {
   const p = a.parts
   p.w.textContent = when(a.createdAt)
-  const tag = document.createElement('span'); tag.className = 'kind'; tag.textContent = a.kind === 'rec' ? 'Recording' : 'Detection'
+  const tag = document.createElement('span'); tag.className = 'kind' + (a.det ? ' ai' : ''); tag.textContent = a.kind === 'rec' ? 'Recording' : a.det ? 'AI detection' : 'Detection'
   const h = document.createElement('span'); h.className = 'mono'; h.textContent = short(a.hash); h.title = a.memo
   const extra = document.createElement('span'); extra.className = 'meta'
-  extra.textContent = a.kind === 'det' && a.ref ? ' · ' + a.ref.split('/')[2] : a.kind === 'rec' ? ' · 15 fps original' : ''
-  p.what.replaceChildren(tag, h, extra)
+  extra.textContent = a.kind === 'rec' ? ' · 15 fps original' : a.kind === 'det' && a.ref && !a.det ? ' · ' + a.ref.split('/')[2] : ''
+  const parts = [tag]
+  if (a.det) {
+    // What the model saw, from the anchored record itself: "Rat detected by AI · 91% · rat-litroom-v5"
+    if (a.det.image) { const t = document.createElement('img'); t.className = 'thumb'; t.src = 'api/detections?image=' + a.det.image; t.alt = ''; t.loading = 'lazy'; parts.push(t) }
+    const d = document.createElement('b'); d.textContent = (a.det.label || 'rat')[0].toUpperCase() + (a.det.label || 'rat').slice(1) + ' detected by AI'
+    const m = document.createElement('span'); m.className = 'meta'; m.textContent = ' · ' + Math.round((a.det.confidence || 0) * 100) + '%' + (a.det.model ? ' · ' + a.det.model : '') + (a.det.image ? ' · picture on chain' : '') + ' · '
+    parts.push(d, m)
+  }
+  p.what.replaceChildren(...parts, h, extra)
   const s = a.status
   p.st.className = 'st ' + (s === 'confirmed' ? 'ok' : s === 'failed' ? 'bad' : 'wait')
   p.st.textContent = s === 'confirmed' ? (a.live ? '✓ confirmed live' : '✓ confirmed') : s === 'failed' ? '✗ failed' : s === 'sent' ? '… confirming' : '… sending'

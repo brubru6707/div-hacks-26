@@ -236,7 +236,7 @@ let balance = { at: 0, sol: null }
 export async function summary() {
   const col = await anchors()
   const [list, counts] = await Promise.all([
-    col.find({}, { projection: { payload: 0 } }).sort({ createdAt: -1 }).limit(100).toArray(),
+    col.find({}).sort({ createdAt: -1 }).limit(100).toArray(),
     col.aggregate([{ $group: { _id: { kind: '$kind', status: '$status' }, n: { $sum: 1 } } }]).toArray(),
   ])
   if (Date.now() - balance.at > 30_000) {
@@ -245,7 +245,16 @@ export async function summary() {
   return {
     counts: counts.map(c => ({ kind: c._id.kind, status: c._id.status, n: c.n })),
     balance: balance.sol,
-    anchors: list,
+    // A detection's anchored record says what the model saw; the page shows it instead of a bare hash.
+    anchors: list.map(({ payload, ...a }) => {
+      if (a.kind !== 'det' || !payload) return a
+      try {
+        const p = JSON.parse(payload)
+        return { ...a, det: { label: p.label, confidence: p.confidence, model: p.model, image: p.image ?? null } }
+      } catch {
+        return a
+      }
+    }),
   }
 }
 
