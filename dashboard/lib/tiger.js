@@ -82,6 +82,8 @@ const SCHEMA = [
    )`,
   `select create_hypertable('detections', by_range('ts', interval '1 day'), if_not_exists => true)`,
   `create index if not exists detections_recording on detections (recording, ts)`,
+  // SHA-256 of the sighting's picture (the boxed frame, kept in MongoDB sighting_images); part of the Solana anchor.
+  `alter table detections add column if not exists image_sha256 text`,
 
   `create table if not exists recordings (
      id          text primary key,
@@ -204,11 +206,11 @@ export async function insertDetections(list) {
   if (!rows.length) return 0
   const col = f => rows.map(f)
   await query(
-    `insert into detections (ts, node, recording, frame, label, confidence, x, y, w, h, model)
-     select to_timestamp(t / 1000.0), n, r, f, l, c, x, y, w, h, m
+    `insert into detections (ts, node, recording, frame, label, confidence, x, y, w, h, model, image_sha256)
+     select to_timestamp(t / 1000.0), n, r, f, l, c, x, y, w, h, m, i
      from unnest($1::float8[], $2::text[], $3::text[], $4::int[], $5::text[], $6::real[],
-                 $7::real[], $8::real[], $9::real[], $10::real[], $11::text[])
-          as u(t, n, r, f, l, c, x, y, w, h, m)`,
+                 $7::real[], $8::real[], $9::real[], $10::real[], $11::text[], $12::text[])
+          as u(t, n, r, f, l, c, x, y, w, h, m, i)`,
     [
       col(d => (d.ts ? new Date(d.ts).getTime() : Date.now())),
       col(d => String(d.node || 'pi')),
@@ -219,6 +221,7 @@ export async function insertDetections(list) {
       col(d => d.box?.[0] ?? d.x ?? null), col(d => d.box?.[1] ?? d.y ?? null),
       col(d => d.box?.[2] ?? d.w ?? null), col(d => d.box?.[3] ?? d.h ?? null),
       col(d => (d.model ? String(d.model) : null)),
+      col(d => (d.image_sha256 ? String(d.image_sha256) : null)),
     ],
   )
   return rows.length

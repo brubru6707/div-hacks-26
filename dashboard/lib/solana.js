@@ -114,11 +114,14 @@ const r4 = v => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : M
 
 // The exact bytes that get hashed for a detection. Fields are fixed and in a
 // fixed order, and numbers are rounded, so the same row read back from Tiger
-// Data (real columns, timestamptz) produces the same string.
+// Data (real columns, timestamptz) produces the same string. A sighting with a
+// picture is v2: it also carries the picture's SHA-256, so the chain vouches for
+// the image too. v1 (no picture) stays byte-for-byte what it always was.
 export function canonicalDetection(d) {
   const box = [d.box?.[0] ?? d.x, d.box?.[1] ?? d.y, d.box?.[2] ?? d.w, d.box?.[3] ?? d.h].map(r4)
+  const image = d.image_sha256 ? String(d.image_sha256) : null
   return JSON.stringify({
-    v: 1,
+    v: image ? 2 : 1,
     ts: Math.round(d.ts instanceof Date ? d.ts.getTime() : typeof d.ts === 'number' ? d.ts : d.ts ? new Date(d.ts).getTime() : NaN),
     node: String(d.node || 'pi'),
     recording: d.recording ? String(d.recording) : null,
@@ -127,6 +130,7 @@ export function canonicalDetection(d) {
     confidence: r4(d.confidence),
     box: box.every(v => v == null) ? null : box,
     model: d.model ? String(d.model) : null,
+    ...(image && { image }),
   })
 }
 
@@ -271,11 +275,22 @@ export async function recompute(anchorDoc, { query, tigerEnabled, videoPath }) {
   if (!tigerEnabled) return { ok: null, detail: 'Tiger Data is not configured, so the detection row cannot be read.' }
   const p = JSON.parse(anchorDoc.payload)
   const { rows } = await query(
-    `select extract(epoch from ts) * 1000 as ts, node, recording, frame, label, confidence, x, y, w, h, model
+    `select extract(epoch from ts) * 1000 as ts, node, recording, frame, label, confidence, x, y, w, h, model, image_sha256
      from detections where ts = to_timestamp($1 / 1000.0) and node = $2 and label = $3`,
     [p.ts, p.node, p.label])
   if (!rows.length) return { ok: false, hash: null, detail: 'The detection row is gone (deleted?).' }
-  const candidates = rows.map(r => canonicalDetection({ ...r, ts: Number(r.ts) }))
-  const payload = candidates.find(c => sha256(c) === anchorDoc.hash) ?? candidates[0]
-  return { ok: true, hash: sha256(payload), payload, anchored: anchorDoc.payload, detail: 'SHA-256 of the detection row in Tiger Data' }
+  const candidates = rows.map(r => ({ row: r, payload: canonicalDetection({ ...r, ts: Number(r.ts) }) }))
+  const { row, payload } = candidates.find(c => sha256(c.payload) === anchorDoc.hash) ?? candidates[0]
+  return { ok: true, hash: sha256(payload), payload, anchored: anchorDoc.payload, detail: 'SHA-256 of the detection row in Tiger Data',
+    picture: row.image_sha256 ? await checkPicture(row.image_sha256) : null }
+}
+
+// The sighting's picture as stored now, hashed again: it must still match the hash in the (anchored) row.
+export async function checkPicture(sha) {
+  const doc = await (await db()).collection('sighting_images').findOne({ _id: sha }, { projection: { jpeg: 1 } })
+  if (!doc) return { ok: false, sha, detail: 'The picture is missing from storage.' }
+  const now = createHash('sha256').update(doc.jpeg.buffer).digest('hex')
+  return now === sha
+    ? { ok: true, sha, detail: 'The stored picture hashes to ' + sha.slice(0, 12) + '…, the value in the anchored record.' }
+    : { ok: false, sha, detail: 'The stored picture now hashes to ' + now.slice(0, 12) + '…, not ' + sha.slice(0, 12) + '….' }
 }

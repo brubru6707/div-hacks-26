@@ -355,6 +355,7 @@ class RatDetector:
         self.last_event = None
         self.error = None
         self.model = None
+        self.fed = None          # the frame the worker is working on (its result goes with it)
 
     @property
     def running(self):
@@ -395,6 +396,7 @@ class RatDetector:
         if self.busy or not self.running:
             return
         self.busy = True
+        self.fed = jpeg
         try:
             self.proc.stdin.write(len(jpeg).to_bytes(4, "big") + jpeg)
             self.proc.stdin.flush()
@@ -420,7 +422,7 @@ class RatDetector:
                         self.boxes_at = now
                     self.times = [t for t in self.times if now - t < 3] + [now]
                 if r.get("event"):
-                    self.sighting(r["event"])
+                    self.sighting(r["event"], self.fed)
             self.busy = False
         if self.proc is proc and self.want:  # died on its own: the next sync restarts it
             self.error = self.error or f"detector exited ({proc.poll()})"
@@ -433,7 +435,7 @@ class RatDetector:
                 log("detector:", text)
                 self.error = text[-200:]
 
-    def sighting(self, ev):
+    def sighting(self, ev, frame):
         now = time.monotonic()
         if self.last_event is not None and now - self.last_event < SIGHTING_GAP:
             return
@@ -442,8 +444,10 @@ class RatDetector:
         x, y, w, h = ev["box"]
         log(f"rat sighted ({ev['conf']:.2f}, {ev['hits']} frames)")
         rec = recorder.report()
+        # The picture is the exact frame the model confirmed, with its boxes drawn on (full 640x480).
         body = {"label": "rat", "confidence": ev["conf"], "box": [x, y, w, h], "model": DETECT_MODEL_NAME,
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z",
+                **({"image": base64.b64encode(self.annotate(frame)).decode()} if frame else {}),
                 **({"recording": rec["id"], "frame": rec["frames"]} if rec and not rec["done"] else {})}
         threading.Thread(target=self._post, args=(body,), daemon=True).start()
 

@@ -789,7 +789,16 @@ async function verifyAnchor(a) {
     const now = srv.now || {}
     if (now.ok === null || now.ok === undefined) resLine(box, now.detail || srv.error || 'Could not recompute the hash here.')
     else if (!now.ok) resLine(box, ['✗ Changed: ', 'bad'], now.detail)
-    else if (now.hash === memoHash(memo)) resLine(box, ['✓ Unchanged since it was anchored. ', 'ok'], now.detail + ' hashes to ' + short(now.hash) + ', the same as on chain.')
+    else if (now.hash === memoHash(memo)) {
+      resLine(box, ['✓ Unchanged since it was anchored. ', 'ok'], now.detail + ' hashes to ' + short(now.hash) + ', the same as on chain.')
+      // A v2 sighting: the anchored record includes its picture's hash, so the picture is checked too.
+      if (now.picture) {
+        resLine(box, now.picture.ok ? ['✓ Picture matches. ', 'ok'] : ['✗ Picture changed. ', 'bad'], now.picture.detail)
+        const img = document.createElement('img'); img.src = 'api/detections?image=' + now.picture.sha; img.alt = 'The sighting'
+        img.style.cssText = 'display:block;max-width:320px;width:100%;margin-top:8px;border-radius:8px'
+        box.append(img)
+      }
+    }
     else {
       resLine(box, ['✗ Changed after it was anchored. ', 'bad'], now.detail + ' now hashes to ' + short(now.hash) + '; the chain says ' + short(memoHash(memo)) + '.')
       if (now.payload && now.anchored) {
