@@ -34,7 +34,16 @@ if [ ! -f "$POC/web/public/city/tiles.json" ]; then
   tar -xzf "$POC/web/public/city-bake.tar.gz" -C "$POC/web/public" && rm "$POC/web/public/city-bake.tar.gz"
 fi
 say "build web ($(git -C "$POC" log -1 --format='%h %s'))"
-( cd "$POC/web" && npm ci --no-audit --no-fund --silent && npm run build --silent && node scripts/cell-centres.mjs )
+# The web app moved to pnpm (pinned in package.json "packageManager"); older checkouts still use npm.
+( cd "$POC/web"
+  if [ -f pnpm-lock.yaml ]; then
+    PNPM="npx -y pnpm@$(node -p 'require("./package.json").packageManager.split("@")[1]')"
+    export npm_config_manage_package_manager_versions=false
+    $PNPM install --frozen-lockfile --silent && $PNPM run build
+  else
+    npm ci --no-audit --no-fund --silent && npm run build --silent
+  fi
+  node scripts/cell-centres.mjs )
 # Same owl tab icon as the dashboard, in place of Vite's default lightning bolt.
 cp "$HERE/owl-favicon.svg" "$POC/web/dist/favicon.svg"
 
