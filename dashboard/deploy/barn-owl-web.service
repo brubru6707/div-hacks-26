@@ -1,0 +1,38 @@
+[Unit]
+Description=barn-owl dashboard (same code as barn-owl.vercel.app)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=barn-owl
+Group=barn-owl
+WorkingDirectory=/srv/barn-owl/app
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=8771
+# The 15 fps recordings the Pi uploads, and their MP4 conversions.
+Environment=VIDEO_DIR=/srv/barn-owl/videos
+# MONGODB_URI, DASH_USER, DASH_PASS, SESSION_SECRET, PI_TOKEN. Readable only
+# by root and the service user.
+EnvironmentFile=/etc/barn-owl/env
+ExecStart=/usr/bin/node /srv/barn-owl/app/server.js
+Restart=always
+RestartSec=2
+
+# It listens only on loopback and writes only the videos directory.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+ReadWritePaths=/srv/barn-owl/videos
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

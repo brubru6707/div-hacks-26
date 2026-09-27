@@ -1,0 +1,16 @@
+[Unit]
+Description=Barn Owl dashboard agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pi
+EnvironmentFile=/etc/barn-owl.env
+# lgpio writes scratch files to the working directory; / isn't writable.
+WorkingDirectory=/home/pi/barn-owl
+ExecStart=/usr/bin/python3 -u /home/pi/barn-owl/agent.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -39,5 +39,7 @@ The neighbor entry goes stale fast; warm before each connect, or hold an `ssh -M
 - `enclosure/` — parametric 3D-printable case. `enclosure.scad` (OpenSCAD) and `build_stl.py` (trimesh) generate `stl/`: `base_with_pisugar.stl`, `base_no_pisugar.stl`, and `lid.stl`. The node includes a PiSugar battery pack under the Pi; it's removable, hence the two base variants.
 - `enclosure/v2/` — the current case (sensors on the front wall, IR light + camera + PIR in a row). `stl/` is the print set: `v2_base_usb.stl` (no PiSugar) or `v2_base_pisugar.stl`, plus lid, stand, shroud, diffuser and a front-wall test plate. The IR light pocket is cut to the vendor drawing by `fit_ir_light.py`; see `V2_NOTES.md`.
 - `HANDOFF-pi5-camera-pir-node.md` — full handoff for whoever receives the hardware.
+- `HANDOFF-barn-owl-dashboard.md` — the dashboard (barn-owl.tech), recording pipeline, and training-data status. Code in `dashboard/` and `pi/`.
+- `HANDOFF-solana.md` — Solana track plan: on-chain, tamper-proof recording hashes with a live chain log on the dashboard; why the Ledger is optional.
 
 Scripts live in `~/node-test/` on the Pi.
