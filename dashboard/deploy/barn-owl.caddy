@@ -1,0 +1,85 @@
+# barn-owl -- the Pi dashboard, served next to jenzombie on the same droplet.
+#
+# Imported from /etc/caddy/Caddyfile. provision.sh replaces __SITES__ with the
+# hostnames literally (no env vars), so `caddy validate` works from a plain shell.
+
+#   /admin/*                       the Pi dashboard (Node, :8771), /admin stripped
+#   /api/pi, stream-in, video-in,  what the Pi posts to (and detections); kept at the old
+#   /api/detections                paths so the Pi needs no change. Also Node.
+#   /api/*                         the team app's API (FastAPI, :8772), /api stripped
+#   everything else                the team app (Vite build in /srv/poc/src/web/dist)
+__SITES__ {
+	header {
+		-Server
+		Referrer-Policy no-referrer
+		X-Content-Type-Options nosniff
+		Strict-Transport-Security "max-age=31536000"
+	}
+
+	redir /admin /admin/ 308
+
+	handle_path /admin/* {
+		encode zstd gzip
+		reverse_proxy 127.0.0.1:8771 {
+			# The 15 fps view is one long streamed response; pass frames through as
+			# they come instead of buffering.
+			flush_interval -1
+		}
+	}
+
+	@pi path /api/pi /api/stream-in /api/video-in /api/detections
+	handle @pi {
+		reverse_proxy 127.0.0.1:8771 {
+			flush_interval -1
+		}
+	}
+
+	# No encode here: /api/stream is Server-Sent Events and gzip would hold it back.
+	handle_path /api/* {
+		reverse_proxy 127.0.0.1:8772 {
+			flush_interval -1
+		}
+	}
+
+	# The city bake (web/public/city) is plain data: a missing file is a 404, never the
+	# SPA's index.html, and browsers revalidate it (ETag) so a re-bake shows up at once.
+	# Before the bake was deployed the fallback handed out index.html here and Chrome
+	# cached it heuristically, which left the map without buildings.
+	handle /city/* {
+		encode zstd gzip
+		root * /srv/poc/src/web/dist
+		header Cache-Control no-cache
+		file_server
+	}
+
+	# /assets/* is content-hashed by Vite; everything else (index.html) revalidates.
+	handle {
+		encode zstd gzip
+		root * /srv/poc/src/web/dist
+		@hashed path /assets/*
+		header @hashed Cache-Control "public, max-age=31536000, immutable"
+		@page not path /assets/*
+		header @page Cache-Control no-cache
+		try_files {path} /index.html
+		file_server
+	}
+
+	# The Pi authenticates with an Authorization header and browsers with a
+	# session cookie. Caddy redacts some of these by default; delete them all
+	# explicitly (including the Set-Cookie we send back) so no credential
+	# ever lands on disk.
+	log {
+		output file /var/log/caddy/barn-owl.log {
+			roll_size 10MiB
+			roll_keep 3
+		}
+		format filter {
+			wrap json
+			fields {
+				request>headers>Authorization delete
+				request>headers>Cookie delete
+				resp_headers>Set-Cookie delete
+			}
+		}
+	}
+}
