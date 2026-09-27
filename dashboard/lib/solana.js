@@ -250,7 +250,7 @@ export async function summary() {
       if (a.kind !== 'det' || !payload) return a
       try {
         const p = JSON.parse(payload)
-        return { ...a, det: { label: p.label, confidence: p.confidence, model: p.model, image: p.image ?? null } }
+        return { ...a, det: { label: p.label, confidence: p.confidence, model: p.model, image: p.image ?? null, ts: p.ts, recording: p.recording, frame: p.frame } }
       } catch {
         return a
       }

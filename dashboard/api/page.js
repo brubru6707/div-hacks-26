@@ -151,6 +151,10 @@ pre{grid-column:1/-1;margin:0;background:var(--field);border:1px solid var(--lin
 .crow .when{color:var(--muted);font-size:12px;white-space:nowrap}
 .crow .what{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .crow .st{font-size:12px;white-space:nowrap} .st.ok{color:var(--ok)} .st.wait{color:var(--warn)} .st.bad{color:var(--bad)}
+.crow .view{grid-column:1/-1;font-size:12px;display:grid;gap:8px;padding:4px 0 6px}
+.crow .view video,.crow .view img{width:100%;max-width:640px;border-radius:var(--r-sm);background:#000}
+.crow .view .marks{display:flex;flex-wrap:wrap;gap:6px}
+.crow .what{cursor:pointer}
 .crow .res{grid-column:1/-1;font-size:12px;background:var(--field);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px;display:grid;gap:4px}
 .crow .res b.ok{color:var(--ok)} .crow .res b.bad{color:var(--bad)}
 .crow.fresh{animation:fresh 2.5s ease-out}
@@ -693,8 +697,10 @@ function chainRow(a) {
   const st = document.createElement('span'); st.className = 'st'
   const link = document.createElement('a'); link.className = 'btn'; link.target = '_blank'; link.rel = 'noopener'; link.style.color = 'var(--text)'; link.textContent = 'Explorer ↗'
   const ver = btn('Verify', () => verifyAnchor(a))
-  right.append(st, link, ver); el.append(w, what, right)
-  a.parts = { w, what, st, link, ver }
+  const view = btn('View', () => toggleView(a))
+  what.onclick = () => toggleView(a)
+  right.append(st, link, view, ver); el.append(w, what, right)
+  a.parts = { w, what, st, link, ver, view }
   return el
 }
 
@@ -784,6 +790,60 @@ function resLine(box, ...parts) {
   box.append(d); return d
 }
 const chainLine = tx => 'On chain (read by your browser from Solana ' + chain.cfg.cluster + '): slot ' + tx.slot.toLocaleString() + (tx.blockTime ? ', ' + when(tx.blockTime * 1000) : '') + ', signed by ' + (tx.signer === chain.cfg.address ? 'this node’s key' : tx.signer)
+
+// What an anchor is about, opened under its row: a recording plays (with its AI sightings as jump points);
+// a sighting shows the exact frame the model analysed, and the moment in the video if one was recording.
+const videoUrl = (id, kind) => 'api/video?id=' + encodeURIComponent(id) + '&kind=' + kind
+function seekTo(v, rec, frame) {
+  // The Pi logs each frame's time, since the camera can drop frames; fall back to 15 fps.
+  fetch(videoUrl(rec, 'txt')).then(r => r.ok ? r.text() : '').then(t => {
+    const ms = Number(t.split('\\n')[frame])
+    const go = () => { v.currentTime = Number.isFinite(ms) ? ms / 1000 : frame / 15; v.pause() }
+    v.readyState >= 1 ? go() : v.addEventListener('loadedmetadata', go, { once: true })
+  })
+}
+function recVideo(rec) {
+  const v = document.createElement('video'); v.controls = true; v.preload = 'metadata'; v.playsInline = true; v.src = videoUrl(rec, 'mp4')
+  v.onerror = () => { const m = document.createElement('div'); m.className = 'meta'; m.textContent = 'This video is not on the server (only recordings the Pi finished uploading have one).'; v.replaceWith(m) }
+  return v
+}
+function toggleView(a) {
+  let box = a.el.querySelector('.view')
+  if (box) { box.remove(); a.parts.view.textContent = 'View'; return }
+  box = document.createElement('div'); box.className = 'view'
+  a.el.querySelector('.res') ? a.el.querySelector('.res').before(box) : a.el.append(box)
+  a.parts.view.textContent = 'Hide'
+  if (a.kind === 'rec') {
+    const v = recVideo(a.ref); box.append(v)
+    const hits = [...chain.rows.values()].filter(r => r.det && r.det.recording === a.ref && Number.isInteger(r.det.frame)).sort((x, y) => x.det.frame - y.det.frame)
+    const cap = document.createElement('div'); cap.className = 'meta'
+    cap.textContent = 'The 15 fps original whose SHA-256 is on chain.' + (hits.length ? ' AI sightings in it:' : ' No AI sightings were made while it recorded.')
+    box.append(cap)
+    if (hits.length) {
+      const marks = document.createElement('div'); marks.className = 'marks'
+      for (const h of hits) marks.append(btn('🐀 ' + Math.round(h.det.confidence * 100) + '% · frame ' + h.det.frame, () => seekTo(v, a.ref, h.det.frame)))
+      box.append(marks)
+    }
+    return
+  }
+  const d = a.det || {}
+  const cap = document.createElement('div'); cap.className = 'meta'
+  const what = (d.label || 'rat') + ' ' + Math.round((d.confidence || 0) * 100) + '% · ' + (d.model || 'model') + (d.ts ? ' · ' + when(d.ts) : '')
+  if (d.image) {
+    const img = document.createElement('img'); img.src = 'api/detections?image=' + d.image; img.alt = 'The frame the model analysed'
+    box.append(img); cap.textContent = 'The exact frame the model analysed, boxes drawn by the Pi: ' + what + '. Its SHA-256 is inside the anchored record.'
+    box.append(cap)
+  }
+  if (d.recording && Number.isInteger(d.frame)) {
+    const v = recVideo(d.recording); box.append(v); seekTo(v, d.recording, d.frame)
+    const c2 = document.createElement('div'); c2.className = 'meta'; c2.textContent = 'In the recording, at frame ' + d.frame + '. Press play to watch from here.'
+    box.append(c2)
+  }
+  if (!d.image && !d.recording) {
+    cap.textContent = what + '. This sighting was saved before pictures were kept, and nothing was recording, so there is no frame to show. Every sighting from now on has its picture.'
+    box.append(cap)
+  }
+}
 
 async function verifyAnchor(a) {
   let box = a.el.querySelector('.res')
