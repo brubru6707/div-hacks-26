@@ -3,7 +3,8 @@
 #
 #     BO_HOST=root@104.248.231.139 ./dashboard/deploy/push-imessage.sh [--secrets] path-to-poc-checkout
 #
-# --secrets copies poc/imessage/.env (PROJECT_ID, PROJECT_SECRET) to /etc/poc/imessage.env over ssh
+# --secrets copies poc/imessage/.env (PROJECT_ID, PROJECT_SECRET) plus NIGHT_OWL_CHAT_BOT_TOKEN (~/.barn-owl/chat_bot_token,
+# the same value push-poc.sh --secrets gives the API) to /etc/poc/imessage.env over ssh
 # stdin, so it never lands in argv or in the synced tree. Only one copy of the bot may run at a time:
 # stop any local `npm start` first, or every text gets two answers.
 set -euo pipefail
@@ -22,7 +23,8 @@ rsync -a --delete --exclude node_modules --exclude '.env' --exclude '.env.*' --e
 if [ "$SECRETS" = 1 ]; then
   say "secrets"
   ssh "$BO_HOST" 'umask 077; mkdir -p /etc/poc; cat > /etc/poc/imessage.env; chgrp poc /etc/poc/imessage.env; chmod 640 /etc/poc/imessage.env
-    grep -c "^[A-Z_]*=" /etc/poc/imessage.env | sed "s/^/  vars: /"' < "$POC/imessage/.env"
+    grep -c "^[A-Z_]*=" /etc/poc/imessage.env | sed "s/^/  vars: /"' \
+    < <(grep -v '^NIGHT_OWL_CHAT_BOT_TOKEN=' "$POC/imessage/.env"; printf 'NIGHT_OWL_CHAT_BOT_TOKEN=%s\n' "$(cat ~/.barn-owl/chat_bot_token)")
 fi
 
 say "install + start"

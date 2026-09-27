@@ -55,7 +55,9 @@ rsync -a --delete --exclude .git --exclude node_modules --exclude .venv --exclud
 
 if [ "$SECRETS" = 1 ]; then
   say "secrets"
-  { printf 'XAI_API_KEY=%s\n' "$(cat ~/.barn-owl/xai_key)"; grep -E '^AGENT_TOKEN=' "$HERE/../.env.local" | tr -d '"'; } \
+  # NIGHT_OWL_CHAT_BOT_TOKEN: shared with the iMessage bot (push-imessage.sh), so only it can use imessage threads
+  { printf 'XAI_API_KEY=%s\n' "$(cat ~/.barn-owl/xai_key)"; grep -E '^AGENT_TOKEN=' "$HERE/../.env.local" | tr -d '"'
+    printf 'NIGHT_OWL_CHAT_BOT_TOKEN=%s\n' "$(cat ~/.barn-owl/chat_bot_token)"; } \
     | ssh "$BO_HOST" 'umask 077; mkdir -p /etc/poc; cat > /etc/poc/env; chgrp poc /etc/poc/env; chmod 640 /etc/poc/env; wc -l < /etc/poc/env | sed "s/^/  vars: /"'
 fi
 
